@@ -28,6 +28,7 @@ DT_Tools 是 Deadly Trick 的 BepInEx 5 插件。
 | 写日志、命令、JSON、线程代码 | §11 |
 | 改 WebUI 或 API | §12 |
 | 新增一个 MCP 工具、改 MCP 桥接 | §13 |
+| 改观战者 / 房主观战相关 | `docs/观战者机制.md` |
 
 ### 红线速查
 
@@ -92,6 +93,7 @@ if (!Engine.Enabled<本功能Feature>()) return;
 | --- | --- | --- |
 | `DT_Tools/` | 模组项目 | 插件源码和 `DT_Tools.csproj` |
 | `webui-src/` | 前端源码工程 | Vue 3 + Vite 桌面壳 WebUI（见 §12） |
+| `docs/` | 文档 | 机制笔记与耐久结论。改动对应模块**前先查**（现有：`docs/观战者机制.md`） |
 | `libs/` | 只读 | 游戏程序集。编译时引用 |
 | `0.1.16b/` | 只读。在仓库外的工作区根部 | 游戏源码 |
 
