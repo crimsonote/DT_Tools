@@ -194,4 +194,63 @@ namespace DT_Tools.Patches.System.HostSpectate
             }
         }
     }
+
+    /// <summary>
+    /// 大厅阶段把房主那条 entry 的 `IsSpectator` 纠正为 `false`。
+    ///
+    /// **为什么必须纠正**：本功能下房主"大厅阶段是普通玩家"，只在进入选人之前才被标成观战者
+    /// （见 `Logic.cs`）—— 这也正是**原版语义**：`GameRoom.StartLobby` 把所有观战者复位成
+    /// 普通玩家（ACS:170251-170255）、逐人 `InitLobby()`（`IsAlive=true`、`IsGhost=false`、
+    /// `State=Idle`，ACS:175741-175759），而进房时**只有** `State != Lobby` 才可能变成观战者
+    /// （ACS:170523-170526）⇒ **原版大厅里根本不存在观战者**。
+    ///
+    /// 但服务端一次状态切换是**两段**的（ACS:169991-170017）：`State = Lobby` 先同步置好，
+    /// 真正复位观战者的是回调里的 `StartLobby`，那段要**等所有客户端应答**；而客户端自己的
+    /// `StartLobby`（把 `Managers.Game.IsSpectator` 清成 false，ACS:29073）是在它加载完成、
+    /// 应答**之前**跑的。于是存在"客户端已清、服务端还没清"的窗口，而 roster 泵每秒至少广播
+    /// 一次（ACS:159731-159736）⇒ 窗口里那一包仍写着 `IsSpectator=true`。
+    ///
+    /// 原版不会因此出问题：客户端这个标志只有三个写入口（`Clear` ACS:28904、客户端 `StartLobby`
+    /// ACS:29073、`Handle_S_ENTER_GAME` ACS:42053），**从不回头读 roster**。是上游
+    /// `SpectatorJoinFeature.RosterSpectatorPatch` 新增了"按 roster 同步"这条路（观战者转观战时
+    /// 必需），才让这个陈旧值有了副作用：它把客户端的 `IsSpectator` 翻回 true，而**没有第二个
+    /// 写入口会清回来**（要等下一局的 `StartLobby`）。症状：回到大厅后
+    /// `UI_DirectChat.UpdateInput` 一直隐藏聊天输入框（ACS:73502-73512），`Send()` 也拒绝发送
+    /// （ACS:73553）。
+    ///
+    /// **为什么改这里而不是改客户端**：客户端的 `State` 在加载完成前仍是旧值，拿它当判据会有窗口；
+    /// 而"大厅阶段房主不是观战者"本来就是原版保证的状态，让发出去的 roster 与它一致才是从根上修。
+    ///
+    /// ⚠️ 只纠正**房主**这一条：上游"满房观战"的**大厅观战者**（等待中加入的人）在大厅里
+    /// 本来就该是观战者（那是它的设计取向），不能被这层纠正波及。
+    /// </summary>
+    [HarmonyPatch(typeof(GameRoom), nameof(GameRoom.BuildRosterPacket))]
+    internal static class PatchRosterLobbyHostFlag
+    {
+        [HarmonyPostfix]
+        private static void Postfix(GameRoom __instance, S_PLAYER_ROSTER __result)
+        {
+            if (!Engine.Enabled<HostSpectateFeature>())
+                return;
+            if (__instance.State != EGameState.Lobby || __result?.Entries == null)
+                return;
+
+            GamePlayer host = __instance.Host;
+            if (host?.PublicInfo == null)
+                return;
+
+            int hostId = host.PublicInfo.PlayerId;
+            for (int i = 0; i < __result.Entries.Count; i++)
+            {
+                if (__result.Entries[i].PlayerId == hostId && __result.Entries[i].IsSpectator)
+                {
+                    __result.Entries[i].IsSpectator = false;
+                    // 只在"服务端还没复位"的那一小段窗口里会命中（窗口过去后这一条本来就是 false），
+                    // 所以不会刷屏；留着它便于下次一眼看出陈旧值是从这儿被堵住的。
+                    Log.Debug<HostSpectateFeature>(
+                        $"房主观战：大厅阶段把房主 #{hostId} 的陈旧观战标记纠正为 false（服务端字段将在应答回调里复位）");
+                }
+            }
+        }
+    }
 }
