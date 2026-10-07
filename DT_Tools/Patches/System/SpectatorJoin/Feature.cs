@@ -56,6 +56,13 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         /// 其选角请求仍会被服务端忽略（PrefixPickCharacter 对观战者 return false）。
         /// </summary>
         internal static bool ShowPickWindowForSpectator;
+
+        /// <summary>
+        /// 外部功能（如房主观战）请求的**开局最小参与者人数**；由请求方按自己的配置维护
+        /// （房主与观战者不计入）。仅在 <see cref="HostSpectateRequested"/> 置位时参与
+        /// <see cref="PrefixHandleStart"/> 的门槛判定；否则用原版口径（`Define.LOBBY_MIN_PLAYER`）。
+        /// </summary>
+        internal static int HostSpectateMinParticipants = 5;
         internal static int MaxSpectatorsValue =>
             Math.Clamp(MaxSpectators, 1, 16);
 
@@ -177,11 +184,27 @@ namespace DT_Tools.Patches.System.SpectatorJoin
             if (!ShouldHandleSpectators)
                 return true;
 
+            // 开局人数门槛。这里就是**唯一**的判定点：原版 `HandleStart` 的方法体被本 Prefix
+            // 整替（末尾无条件 return false），所以"房主点开始"与"其它功能请求开局"都过这里。
+            //
+            // 房主观战时换一套口径：房主不参与对局，不该占最小人数的名额，
+            // 阈值也用房主观战自己的配置（`[HostSpectate] MinParticipants`，默认 5 = 原版）。
+            // 其余情况完全维持原版口径（`Define.LOBBY_MIN_PLAYER`，可被 [LobbyMinPlayers] 调整）。
             int realCount = __instance.Players.Count(p => !p.IsSpectator);
+            bool hostSpectating = HostSpectateRequested;
+            int need = hostSpectating
+                ? Math.Clamp(HostSpectateMinParticipants, 1, 16)
+                : Define.LOBBY_MIN_PLAYER;
+            int have = hostSpectating
+                       && __instance.Host != null
+                       && !__instance.Host.IsSpectator
+                ? realCount - 1          // 参与者 = 非观战者 − 房主
+                : realCount;
+
             if (__instance.State == EGameState.Lobby
                 && __instance.Host != null
                 && __instance.Host.PublicInfo.PlayerId == player.PublicInfo.PlayerId
-                && realCount >= Define.LOBBY_MIN_PLAYER
+                && have >= need
                 && __instance.Players.All(p => p == __instance.Host || p.IsSpectator || p.Ready))
             {
                 // 超员转观战：最后准备者转观战（按准备倒序、房主除外），凑够参与上限
@@ -191,6 +214,17 @@ namespace DT_Tools.Patches.System.SpectatorJoin
                     ConvertExcessToSpectators(__instance);
                 __instance.BroadcastSystemSFX(ESoundType.ElevatorSfx);
                 __instance.ChangeGameState(EGameState.PickCharacter);
+            }
+            else if (__instance.State == EGameState.Lobby
+                     && __instance.Host != null
+                     && __instance.Host.PublicInfo.PlayerId == player.PublicInfo.PlayerId)
+            {
+                // 只记 Debug（进 WebUI 环形缓冲）：不管是房主手点还是自动开始被挡下，
+                // 都能在这里看到"为什么没开"——原版这条路径是完全静默的。
+                Log.Debug<SpectatorJoinFeature>(
+                    $"开局未放行：参与者 {have}/{need}"
+                    + (hostSpectating ? "（房主观战口径）" : "（原版口径）")
+                    + $"、全员准备={__instance.Players.All(p => p == __instance.Host || p.IsSpectator || p.Ready)}");
             }
             return false;
         }

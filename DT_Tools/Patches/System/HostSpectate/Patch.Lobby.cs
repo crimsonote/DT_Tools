@@ -79,28 +79,19 @@ namespace DT_Tools.Patches.System.HostSpectate
             if (host == null)
                 return;
 
-            // 人数门槛：**参与者**不足 `Define.LOBBY_MIN_PLAYER`（原版 5；可被
-            // [LobbyMinPlayers] 调整，playtest 包为 0）时不自动开。
+            // 这里**只判断"是不是所有人都准备好了"**，不自己判人数门槛：
+            // 门槛（房主不计入、阈值取 `[HostSpectate] MinParticipants`）统一由上游那个
+            // 整替 `HandleStart` 的 Prefix 判定 —— 它是"房主点开始"与"自动开始"共用的
+            // 唯一判定点；两处各写一份迟早会漂。被挡下时那里会记一行 Debug（进 WebUI 日志）。
             //
-            // ⚠️ 必须排除房主。此刻房主还没被标成观战者（标记要等进入选人之前才打），
-            // 而原版那个门槛（`HandleStart`：`Players.Count >= LOBBY_MIN_PLAYER`，
-            // ACS:170992）算的是**房间总人数**、房主也占一个名额 —— 照抄会让
-            // "房主 + 4 人"在只有 **4 名参与者**时就自动开局，比原版的最小规模还小。
-            // 本功能下房主不参与对局，所以这里按参与者算。
-            int participants = __instance.Players.Count(p => !p.IsSpectator && p != host);
-            if (participants < Define.LOBBY_MIN_PLAYER)
-            {
-                // 每次有人点准备都会走到这里，所以只进 WebUI 环形缓冲（Debug），不刷文件日志。
-                Log.Debug<HostSpectateFeature>(
-                    $"房主观战：自动开始等待中 —— 参与者 {participants} 人，未达最小 {Define.LOBBY_MIN_PLAYER} 人");
-                return;
-            }
-
+            // 注意房主此刻**还不是观战者**（标记要等进入选人之前才打），所以
+            // "参与者"要显式排除他，否则房主会被算成开局规模的一部分。
             if (!HostSpectateLogic.InvokeCheckAllPlayerReady(__instance))
                 return;
 
+            int participants = __instance.Players.Count(p => !p.IsSpectator && p != host);
             Log.Info<HostSpectateFeature>(
-                $"房主观战：参与者 {participants} 人已全部准备，自动开始（等同房主点开始）");
+                $"房主观战：参与者 {participants} 人已全部准备，自动请求开局（判定同房主点开始）");
             __instance.HandleStart(host);
         }
     }

@@ -38,6 +38,9 @@ namespace DT_Tools.Patches.System.HostSpectate
         [Config("房主在大厅是否对其他玩家可见。开启（默认）= 大厅里别人能看到他、也能和他说话；关闭 = 从进房起别人就当他不存在（房间人数标签也不含他）。选人阶段起一律隐藏（隐藏房主格子是硬要求）。")]
         public static bool HostVisibleInLobby = true;
 
+        [Config("开局所需的最小参与者人数（1–16，默认 5 = 原版最小人数）。**房主与观战者不计入**——原版算的是房间总人数、房主也占一名，本功能下房主不参与对局，所以按参与者算。房主点开始与自动开始都看这一项；自动开始还要求所有人已准备。", Min = 1, Max = 16)]
+        public static int MinParticipants = 5;
+
         [Config("开始条件。关闭（默认）= 需房主点开始；开启 = 所有真实玩家准备好后自动开始（房主不必操作）。")]
         public static bool AutoStartWhenAllReady = false;
 
@@ -45,7 +48,7 @@ namespace DT_Tools.Patches.System.HostSpectate
         public static bool ShowPickWindow = true;
 
         /// <summary>
-        /// 配置绑定完成后：把"需要处理观战者"的请求同步给上游。
+        /// 配置绑定完成后：把"需要处理观战者"的请求同步给上游，并接上最小人数的热改。
         ///
         /// 上游 `SpectatorJoin` 的那些规则补丁（人数口径 / 准备判定 / 选人不占位 /
         /// 不进存活池 / 开局转幽灵）原本只看它自己的段开关；本功能通过
@@ -55,7 +58,27 @@ namespace DT_Tools.Patches.System.HostSpectate
         /// ⚠️ 这里不能省：段开关是启动读档时读的，而 `OnEnabled` 只在热切换时触发
         /// （AGENTS.md §8「OnEnabled 启动时不触发」）。
         /// </summary>
-        private static void OnLoaded() => SyncHandlingRequest();
+        private static void OnLoaded()
+        {
+            SyncHandlingRequest();
+            WireConfigChanged();
+        }
+
+        /// <summary>
+        /// 订阅本段配置的热改，改完立刻重推给上游。
+        ///
+        /// 为什么需要：开局门槛在**上游**那个整替 `HandleStart` 的 Prefix 里（唯一判定点），
+        /// 它读的是我们推过去的镜像值；`[Config]` 字段本身由 `ConfigBinder` 实时回写，
+        /// 但镜像值只在生命周期事件里推过，不订阅就会停在旧值。
+        /// 这个订阅顺带也覆盖 `ShowPickWindow`（同一个 `SyncHandlingRequest` 一起推）。
+        /// </summary>
+        private static void WireConfigChanged()
+        {
+            if (!Engine.Config.TryGetEntry<int>(
+                    Engine.SectionOf<HostSpectateFeature>(), nameof(MinParticipants), out var entry))
+                return;
+            entry.SettingChanged += (_, __) => SyncHandlingRequest();
+        }
 
         /// <summary>热开启：立刻让上游的观战者规则生效。</summary>
         private static void OnEnabled() => SyncHandlingRequest();
@@ -73,12 +96,17 @@ namespace DT_Tools.Patches.System.HostSpectate
             Log.Info<HostSpectateFeature>("房主观战：段已关闭，房主将在回到大厅时由游戏复位");
         }
 
-        /// <summary>把本功能的启用状态同步给上游（依赖方向：HostSpectate → SpectatorJoin，向下）。</summary>
+        /// <summary>
+        /// 把本功能的启用状态与"开局最小参与者人数"同步给上游
+        /// （依赖方向：HostSpectate → SpectatorJoin，向下）。
+        /// </summary>
         private static void SyncHandlingRequest()
         {
             bool enabled = Engine.Enabled<HostSpectateFeature>();
             SpectatorJoinFeature.HostSpectateRequested = enabled;
             SpectatorJoinFeature.ShowPickWindowForSpectator = enabled && HostSpectateFeature.ShowPickWindow;
+            SpectatorJoinFeature.HostSpectateMinParticipants =
+                global::System.Math.Clamp(HostSpectateFeature.MinParticipants, 1, 16);
         }
     }
 }
