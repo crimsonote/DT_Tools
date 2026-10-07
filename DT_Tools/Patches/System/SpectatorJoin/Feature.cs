@@ -416,8 +416,13 @@ namespace DT_Tools.Patches.System.SpectatorJoin
                 {
                     if (entry.PlayerId == me && entry.IsSpectator)
                     {
-                        Managers.Game.IsSpectator = true;
-                        Log.Info<SpectatorJoinFeature>($"客户端已同步观战标记（局内准备阶段转观战） pid={me}");
+                        // roster 每秒都会广播一次（HostManager.Update，ACS:159731-159736），
+                        // 标记本身幂等，但日志不能每秒打一遍，否则整局刷屏。
+                        if (!Managers.Game.IsSpectator)
+                        {
+                            Managers.Game.IsSpectator = true;
+                            Log.Info<SpectatorJoinFeature>($"客户端已同步观战标记（局内准备阶段转观战） pid={me}");
+                        }
                         return;
                     }
                 }
