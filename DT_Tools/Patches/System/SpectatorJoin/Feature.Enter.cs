@@ -262,7 +262,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
             if (inGame)
             {
                 InvokeEnterSpectatorNow(__instance, player);
-                InvokeChangeAreaToGameArea(player);
+                SendGameAreaToJoiner(player);
             }
 
             return false;
@@ -271,6 +271,52 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         private static void InvokeEnterSpectatorNow(GameRoom room, GamePlayer player)
         {
             AccessTools.Method(typeof(GameRoom), "EnterSpectator")?.Invoke(room, new object[] { player });
+        }
+
+        /// <summary>
+        /// 中途加入的观战者：显式补发一次游戏区 `S_AREA_PUBLIC`。
+        ///
+        /// 为什么必须显式发一次：`EnterSpectator` → `SendSpectatorBootstrap` 里那段区域下发
+        /// 被 `if (State == Survive || State == Detective)` 守着（ACS:170680-170693），
+        /// 所以中途进的是**审判/结算**阶段时观战者拿不到区域包，客户端 `CurrentArea` 恒为 null
+        /// → `ChangeRoom` 永远不被拉起（黑屏/不见场景）。
+        ///
+        /// 位置取刚设好的出生点坐标（本文件给中途加入者也按原版随机了一个出生点，见上方
+        /// `StartPosList` 那几行）；取不到时回退出生点首点，再不行才用 `ErrorPos`。
+        /// **绝不回退 `LobbyPos`** —— 那等于把大厅坐标当游戏区坐标发出去，客户端不会换房间。
+        ///
+        /// 这里走 `Player.ChangeArea(PosInfo, force)`（无 `IsAlive` 判断，ACS:175871）：
+        /// 调用时 `EnterSpectator` 已把观战者置为 `IsAlive=false`，
+        /// `Player.Move` 那条路（`if (IsAlive)`，ACS:175889）不会切区域。
+        /// 客户端能收下这个包，是因为中途加入的客户端刚进 GameScene、`CurrentArea` 还是 null
+        /// （`MapManager.ChangeArea` 的 `!flag || CurrentArea == null`，ACS:29577-29578）。
+        ///
+        /// ⚠️ 这与 `Feature.GameStart.cs` 里"已在房间的玩家转观战"那条路**不同**：
+        /// 那里客户端的 `CurrentArea` 是大厅房间，必须走"存活玩家换区"，
+        /// 所以是**先** `Move(spawn, force:true)` **再** `EnterSpectator`。两条路不能互换。
+        /// </summary>
+        private static void SendGameAreaToJoiner(GamePlayer player)
+        {
+            try
+            {
+                PosInfo pos = player.PublicInfo.Pos;
+                if (pos == null || !AreaManager.Instance.ValidPosition(pos))
+                {
+                    List<PosInfo> startPos = Managers.Data.MapData.StartPosList;
+                    pos = startPos != null && startPos.Count > 0
+                        ? startPos[0]
+                        : (Managers.Data.MapData.ErrorPos ?? new PosInfo { X = 0f, Y = 0f });
+                }
+
+                player.ChangeArea(pos, true);
+                Log.Info<SpectatorJoinFeature>(
+                    $"中途加入观战者区域下发：pos=({pos.X},{pos.Y}) " +
+                    $"区域={player.CurrentArea?.Info.RoomId} pid={player.PublicInfo.PlayerId}");
+            }
+            catch (global::System.Exception ex)
+            {
+                Log.Error<SpectatorJoinFeature>("中途加入观战者区域下发失败: " + ex.Message);
+            }
         }
 
         private static bool InvokeHasSameAccountRemnant(GameRoom room, HostPeerSession session, string accountId, out bool allOwnDummies)

@@ -36,6 +36,26 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [Config("开局参与人数上限（1–16，默认 8 = 原版）。当房间真实玩家数超过该值时，开局前自动将最后准备的人转为观战者（按准备倒序，房主除外）。", Min = 1, Max = 16)]
         public static int PlayMaxPlayersEntry = 8;
 
+        /// <summary>
+        /// 是否需要"处理观战者"（人数口径、准备判定、选人不占位、开局转幽灵等）。
+        ///
+        /// 判据是"**本功能或其它请求方有其一启用**"，而不是"房间里此刻有没有观战者"：
+        ///   · 客户端侧的补丁（Dead / StartPick / roster）拿不到服务端房间，无法知道有没有观战者；
+        ///   · 而且有些判定发生在观战者被标记之前，用"有没有人"会漏掉那一刻。
+        /// 由于这些补丁在"没有观战者"时行为与原版一致，启用它没有副作用。
+        /// </summary>
+        internal static bool ShouldHandleSpectators =>
+            Engine.EnabledOf(typeof(SpectatorJoinFeature)) || HostSpectateRequested;
+
+        /// <summary>外部功能（如房主观战）请求处理观战者时置位；由请求方按自己的开关维护。</summary>
+        internal static bool HostSpectateRequested;
+
+        /// <summary>
+        /// 外部功能（如房主观战）请求"观战者也显示选人界面"时置位；
+        /// 由请求方按自己的配置维护。置位后观战者照常进选人界面，
+        /// 其选角请求仍会被服务端忽略（PrefixPickCharacter 对观战者 return false）。
+        /// </summary>
+        internal static bool ShowPickWindowForSpectator;
         internal static int MaxSpectatorsValue =>
             Math.Clamp(MaxSpectators, 1, 16);
 
@@ -120,7 +140,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [HarmonyPrefix]
         private static bool PrefixRoomMemberCountForMetadata(GameRoom __instance, ref int __result)
         {
-            if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+            if (!ShouldHandleSpectators)
                 return true;
 
             int dup = __instance.Players.Count(d =>
@@ -135,7 +155,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [HarmonyPrefix]
         private static bool PrefixCheckAllPlayerReady(GameRoom __instance, ref bool __result)
         {
-            if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+            if (!ShouldHandleSpectators)
                 return true;
 
             foreach (GamePlayer player in __instance.Players)
@@ -154,7 +174,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [HarmonyPrefix]
         private static bool PrefixHandleStart(GameRoom __instance, GamePlayer player)
         {
-            if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+            if (!ShouldHandleSpectators)
                 return true;
 
             int realCount = __instance.Players.Count(p => !p.IsSpectator);
@@ -165,7 +185,10 @@ namespace DT_Tools.Patches.System.SpectatorJoin
                 && __instance.Players.All(p => p == __instance.Host || p.IsSpectator || p.Ready))
             {
                 // 超员转观战：最后准备者转观战（按准备倒序、房主除外），凑够参与上限
-                ConvertExcessToSpectators(__instance);
+                // 超员转观战属于"满房观战"自身的能力：只有它开着才做，
+                // 免得单纯用房主观战的人被顺带改了别人的参与资格。
+                if (Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+                    ConvertExcessToSpectators(__instance);
                 __instance.BroadcastSystemSFX(ESoundType.ElevatorSfx);
                 __instance.ChangeGameState(EGameState.PickCharacter);
             }
@@ -178,7 +201,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [HarmonyPrefix]
         private static bool PrefixPickCharacter(GameRoom __instance, GamePlayer player, int characterId)
         {
-            if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+            if (!ShouldHandleSpectators)
                 return true;
 
             if (player != null && player.IsSpectator)
@@ -194,7 +217,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [HarmonyPrefix]
         private static bool PrefixCheckPickAllDone(GameRoom __instance)
         {
-            if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+            if (!ShouldHandleSpectators)
                 return true;
 
             var t = Traverse.Create(__instance);
@@ -213,7 +236,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [HarmonyPrefix]
         private static bool PrefixPickRandomOwnedCharacter(GamePlayer player, ref int __result)
         {
-            if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+            if (!ShouldHandleSpectators)
                 return true;
 
             if (player != null && player.IsSpectator && GameRoom.Instance.State == EGameState.PickCharacter)
@@ -267,7 +290,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
             [HarmonyPrefix]
             private static bool Prefix(IPacketSink session, Packet packet)
             {
-                if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+                if (!ShouldHandleSpectators)
                     return true;
 
                 if (!(packet?.Pkt is S_ENTER_GAME pkt))
@@ -308,7 +331,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [HarmonyPostfix]
         private static void PostfixDead(GameManagerEX __instance)
         {
-            if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+            if (!ShouldHandleSpectators)
                 return;
 
             if (__instance.IsSpectator)
@@ -320,10 +343,12 @@ namespace DT_Tools.Patches.System.SpectatorJoin
         [HarmonyPrefix]
         private static bool PrefixStartPickClient(GameManagerEX __instance)
         {
-            if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+            if (!ShouldHandleSpectators)
                 return true;
 
-            if (__instance.IsSpectator)
+            // 观战者默认不弹选人界面（原行为）；外部功能可请求"照常进"
+            // —— 其选角请求仍会被服务端忽略，完成判定也只算真实玩家。
+            if (__instance.IsSpectator && !ShowPickWindowForSpectator)
                 return false;
             return true;
         }
@@ -381,7 +406,7 @@ namespace DT_Tools.Patches.System.SpectatorJoin
             [HarmonyPostfix]
             private static void Postfix(S_PLAYER_ROSTER pkt)
             {
-                if (!Engine.EnabledOf(typeof(SpectatorJoinFeature)))
+                if (!ShouldHandleSpectators)
                     return;
                 if (pkt?.Entries == null || Managers.Player?.MyPlayer?.PublicInfo == null)
                     return;
