@@ -324,9 +324,20 @@ namespace DT_Tools.Patches.System.SpectatorJoin
             }
         }
 
-        // ── 客户端：观战者死后保持自由移动（幽灵飞行） ─────────────────────
-        // 游戏开始时服务端下发 S_DEAD，Dead() 会把 CanControl 置 false；
-        // 观战者需要像幽灵一样继续自由移动。
+        // ── 客户端：观战者死后保持自由移动（幽灵飞行），并保住观战者 HUD ──────
+        // 游戏开始时服务端下发 S_DEAD，Dead() 会把 CanControl 置 false，
+        // 并用 HideAll 把整个场景 HUD 收掉；观战者需要像幽灵一样继续自由移动，
+        // 而且不该丢掉倒计时与观战面板。
+        //
+        // 为什么必须自己把 HUD 补回来：原版"中途加入的观战者"是 Dead() 之后才赋 State
+        // （Handle_S_ENTER_GAME：ACS:42056 先 Dead()、42062 再赋 State），
+        // State setter（ACS:28708-28724）会走 StartState → ShowUI(state)，
+        // 再经 StartSurvive 的 else 分支（ACS:29167-29174，观战者 IsAlive=false 才走这条）
+        // 补一次 HideAll + ShowUI(0)；ShowUI(NoneState) 的 default 分支正是观战者那套 HUD
+        // —— Observe + Spectate 面板 + 计时面板（ACS:75676-75692）。
+        // 而"已在房间的玩家转观战"（房主观战、满房超员转观战）是 State 早就到位、
+        // S_DEAD 后到，Dead() 就成了最后一次 HideAll ⇒ 倒计时等全部留在隐藏状态。
+        // 这里补一次与那个 else 分支等价的重新显示，让两条路的客户端终态一致。
         [HarmonyPatch(typeof(GameManagerEX), nameof(GameManagerEX.Dead))]
         [HarmonyPostfix]
         private static void PostfixDead(GameManagerEX __instance)
@@ -334,8 +345,12 @@ namespace DT_Tools.Patches.System.SpectatorJoin
             if (!ShouldHandleSpectators)
                 return;
 
-            if (__instance.IsSpectator)
-                __instance.CanControl = true;
+            if (!__instance.IsSpectator)
+                return;
+
+            __instance.CanControl = true;
+            __instance.BroadcastSceneEvent(Define.ESceneEventType.HideAll);
+            __instance.BroadcastSceneEvent(Define.ESceneEventType.ShowUI);
         }
 
         // ── 客户端：观战者不显示选角弹窗（也不发送选角包） ─────────────────
