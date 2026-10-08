@@ -1,6 +1,7 @@
 using DT_Tools.Core;
 using DT_Tools.Core.Attributes;
 using DT_Tools.Patches.System.SpectatorJoin;
+using Server.Game;
 
 namespace DT_Tools.Patches.System.HostSpectate
 {
@@ -44,6 +45,9 @@ namespace DT_Tools.Patches.System.HostSpectate
         [Config("开始条件。关闭（默认）= 需房主点开始；开启 = 所有真实玩家准备好后自动开始（房主不必操作）。")]
         public static bool AutoStartWhenAllReady = false;
 
+        [Config("自动开始的延迟（秒，0 = 立刻）。所有人确认后等这几秒再开局，给「还没选完角 / 想反悔」留缓冲；期间有人取消准备会重新计时。", Min = 0, Max = 60)]
+        public static int AutoStartDelaySeconds = 5;
+
         [Config("房主是否进入选人界面。开启（默认）= 房主照常进选人界面、能看到其他人的选择（他自己的选择会被服务端忽略，其他人选完即倒计时）；关闭 = 与原版旁观者一致，不弹选人界面。")]
         public static bool ShowPickWindow = true;
 
@@ -80,11 +84,15 @@ namespace DT_Tools.Patches.System.HostSpectate
             entry.SettingChanged += (_, __) => SyncHandlingRequest();
         }
 
-        /// <summary>热开启：立刻让上游的观战者规则生效。</summary>
-        private static void OnEnabled() => SyncHandlingRequest();
+        /// <summary>热开启：立刻让上游的观战者规则生效，并把数据与状态推平。</summary>
+        private static void OnEnabled()
+        {
+            SyncHandlingRequest();
+            ApplyImmediately("开启");
+        }
 
         /// <summary>
-        /// 热关闭：撤销请求。
+        /// 热关闭：撤销请求，并把数据与状态推平。
         ///
         /// **故意不在局内还原房主** —— 那等于让已出局的人复活。
         /// 还原由游戏自己的 `GameRoom.StartLobby` 在回到大厅时完成；若此刻房主还没被标记
@@ -93,7 +101,43 @@ namespace DT_Tools.Patches.System.HostSpectate
         private static void OnDisabled()
         {
             SyncHandlingRequest();
+            ApplyImmediately("关闭");
             Log.Info<HostSpectateFeature>("房主观战：段已关闭，房主将在回到大厅时由游戏复位");
+        }
+
+        /// <summary>
+        /// 热切换后立刻把"数据与状态"推平，不等下一次自然广播。
+        ///
+        /// 做的是原版在人员进出时做的同一对动作（`GameRoom.EnterPlayer`/`LeavePlayer`，ACS:172169-172191）：
+        ///   1. `MarkRosterDirty()` —— 让 roster 泵（ACS:159731-159736）立刻重播名单。
+        ///      对别人：`HostVisibleInLobby` 打开时房主当场回到他们名单里、关掉时当场消失
+        ///      （`ApplyRoster` 的差集处理会把 `_cache` 条目连同实体一起摘掉，ACS:31284-31298）；
+        ///      对房主本人：同步观战标记（他那边靠这条 entry 判断自己是不是观战者）。
+        ///   2. `UpdateMemberCountMetadata(RoomMemberCountForMetadata())` —— 对外人数口径
+        ///      （Steam metadata `members`）立刻反映"房主算不算一名"，房间列表 `{Cur}/{Max}`
+        ///      与满员判定都读它（ACS:172177 / 160320-160340 / 170497）。
+        ///
+        /// 只在大厅有意义：局内房主已是观战者，人数与名单的"真相"由 `StartLobby` 在回大厅时统一复位；
+        /// 这里调一次也不会错（幂等）。
+        /// </summary>
+        private static void ApplyImmediately(string what)
+        {
+            try
+            {
+                GameRoom room = GameRoom.Instance;
+                if (room == null)
+                    return;                     // 启动读档时房间还不存在，直接空跑
+
+                room.MarkRosterDirty();
+                Managers.Network?.Lobby?.UpdateMemberCountMetadata(room.RoomMemberCountForMetadata());
+                Log.Info<HostSpectateFeature>(
+                    $"房主观战：已按新开关（{what}）立即刷新 —— 名单重播已排队，" +
+                    $"对外人数={room.RoomMemberCountForMetadata()}（阶段={room.State}）");
+            }
+            catch (global::System.Exception ex)
+            {
+                Log.Warn<HostSpectateFeature>("房主观战：热切换后立即刷新失败（已忽略）：" + ex.Message);
+            }
         }
 
         /// <summary>
