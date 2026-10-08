@@ -1,8 +1,11 @@
+using System;
+using System.Collections;
 using System.Linq;
 using DT_Tools.Core;
 using HarmonyLib;
 using Protocol;
 using Server.Game;
+using UnityEngine;
 using GamePlayer = Server.Game.Player;
 
 namespace DT_Tools.Patches.System.HostSpectate
@@ -65,6 +68,12 @@ namespace DT_Tools.Patches.System.HostSpectate
     [HarmonyPatch(typeof(GameRoom), nameof(GameRoom.HandleReady))]
     internal static class PatchAutoStart
     {
+        /// <summary>延迟开局的预约协程（`0` 秒延迟时不使用）。</summary>
+        private static Coroutine _pending;
+
+        /// <summary>预约代号：准备状态一变就 +1，旧协程醒来发现代号不符即自行退出。</summary>
+        private static int _token;
+
         [HarmonyPostfix]
         private static void Postfix(GameRoom __instance, bool isReady)
         {
@@ -79,6 +88,10 @@ namespace DT_Tools.Patches.System.HostSpectate
             if (host == null)
                 return;
 
+            // 任何一次准备状态变化都作废上一份预约：有人在延迟窗口里取消准备，就得真的把这次开局
+            // 拦下来；又点回准备，则重新计时。
+            _token++;
+
             // 这里**只判断"是不是所有人都准备好了"**，不自己判人数门槛：
             // 门槛（房主不计入、阈值取 `[HostSpectate] MinParticipants`）统一由上游那个
             // 整替 `HandleStart` 的 Prefix 判定 —— 它是"房主点开始"与"自动开始"共用的
@@ -90,9 +103,44 @@ namespace DT_Tools.Patches.System.HostSpectate
                 return;
 
             int participants = __instance.Players.Count(p => !p.IsSpectator && p != host);
+            int delay = Math.Clamp(HostSpectateFeature.AutoStartDelaySeconds, 0, 60);
+            if (delay <= 0)
+            {
+                Log.Info<HostSpectateFeature>(
+                    $"房主观战：参与者 {participants} 人已全部准备，立即自动请求开局（判定同房主点开始）");
+                __instance.HandleStart(host);
+                return;
+            }
+
+            int token = _token;
             Log.Info<HostSpectateFeature>(
-                $"房主观战：参与者 {participants} 人已全部准备，自动请求开局（判定同房主点开始）");
-            __instance.HandleStart(host);
+                $"房主观战：参与者 {participants} 人已全部准备，{delay} 秒后自动开局（期间有人取消准备会重新计时）");
+            CoroutineHost.Stop(_pending);
+            _pending = CoroutineHost.Start(CoStartAfter(delay, token));
+        }
+
+        /// <summary>
+        /// 延迟到期后重新校验一次再开局。
+        ///
+        /// 这几秒里可能发生：有人取消准备（`_token` 已变）、房主自己手点了开始或人走光了
+        /// （房间已不在大厅 / 已不在原状态）、人数掉到门槛以下。任一情况都放弃本次预约 ——
+        /// 排到期的动作不能"凭几秒前的判断"动手。
+        /// </summary>
+        private static IEnumerator CoStartAfter(int delay, int token)
+        {
+            yield return new WaitForSeconds(delay);
+
+            if (token != _token)
+                yield break;
+            GameRoom room = GameRoom.Instance;
+            if (room == null || room.State != EGameState.Lobby)
+                yield break;
+            GamePlayer host = room.Host;
+            if (host == null || !HostSpectateLogic.InvokeCheckAllPlayerReady(room))
+                yield break;
+
+            Log.Info<HostSpectateFeature>("房主观战：延迟结束，自动请求开局（判定同房主点开始）");
+            room.HandleStart(host);
         }
     }
 }
