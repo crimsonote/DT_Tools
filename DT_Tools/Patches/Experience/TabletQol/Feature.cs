@@ -59,6 +59,9 @@ namespace DT_Tools.Patches.Experience.TabletQol
         public static bool ConfirmShowCard = true;
 
         [Config("② 二次确认：遮罩不透明度（0–1）。", Min = 0f, Max = 1f)]
-        public static float DimAlpha = 0.55f;
+        public static float DimAlpha = 0.45f;
+
+        [Config("② 二次确认：确认栏面板的不透明度（0–1，1 = 完全不透明）。", Min = 0f, Max = 1f)]
+        public static float PanelAlpha = 0.86f;
     }
 }

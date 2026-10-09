@@ -10,127 +10,33 @@ using UnityEngine.UI;
 namespace DT_Tools.Patches.Experience.TabletQol
 {
     /// <summary>
-    /// ① 滚动条：运行时给一个 `ScrollRect` 补上可拖拽的滚动条。
-    ///
-    /// 游戏**从不用** `UnityEngine.UI.Scrollbar`（0.1.17a 反编译转储全文 0 处），没有现成 prefab 可复用，
-    /// 只能自己拼：轨道（背景 `Image`）+ 手柄（子 `Image`）+ `Scrollbar`，交给 `ScrollRect` 驱动。
-    ///
-    /// 默认**贴边**（`BarOffset = 0`）；`BarTrackClickPages` 打开时轨道可点（点空白翻一页，更省事），
-    /// 关闭时轨道 `raycastTarget = false` ⇒ 不抢底下按钮的点击、也不会误触跳页（只留手柄可拖）。
-    ///
-    /// 轴以 `ScrollRect` 当前真实轴为准；**两个轴都没开时按竖排处理**而不是跳过 ——
-    /// 平板列表都是竖排（`verticalNormalizedPosition` / `UI_SmoothScroll.ScrollToVertical`，
-    /// 转储 :52730 / :53667 / :54830），而"都没开"通常只是内容还短/还没刷新 ⇒ 跳过就永远挂不上
-    /// （实机踩过：同一块 `ClueSrollRect` 会议阶段有条、调查阶段没条）。
-    /// </summary>
-    internal static class TabletQolScrollbar
-    {
-        private const string BarName = "DT_TabletScrollbar";
-
-        private const float TrackAlpha = 0.10f;
-        private const float HandleAlpha = 0.45f;
-
-        public static bool Attach(ScrollRect scroll, string label, string reason)
-        {
-            if (scroll == null)
-                return false;
-            if (scroll.verticalScrollbar != null || scroll.horizontalScrollbar != null)
-                return false;                        // 已挂（被销毁时 Unity 的 null 语义会让这里重新挂）
-
-            bool axisForced = !scroll.vertical && !scroll.horizontal;
-            bool vertical = scroll.vertical || axisForced;
-
-            int width = Mathf.Clamp(TabletQolFeature.BarWidth, 4, 40);
-            int inset = Mathf.Clamp(TabletQolFeature.BarOffset, 0, 60);
-            Transform parent = scroll.viewport != null ? scroll.viewport : scroll.transform;
-
-            GameObject go = new GameObject(BarName, typeof(RectTransform), typeof(Image), typeof(Scrollbar));
-            RectTransform rt = (RectTransform)go.transform;
-            rt.SetParent(parent, false);
-            rt.localScale = Vector3.one;
-            if (vertical)
-            {
-                rt.anchorMin = new Vector2(1f, 0f);
-                rt.anchorMax = new Vector2(1f, 1f);
-                rt.pivot = new Vector2(1f, 0.5f);
-                rt.sizeDelta = new Vector2(width, 0f);
-                rt.anchoredPosition = new Vector2(-inset, 0f);
-            }
-            else
-            {
-                rt.anchorMin = new Vector2(0f, 0f);
-                rt.anchorMax = new Vector2(1f, 0f);
-                rt.pivot = new Vector2(0.5f, 0f);
-                rt.sizeDelta = new Vector2(0f, width);
-                rt.anchoredPosition = new Vector2(0f, inset);
-            }
-
-            Image track = go.GetComponent<Image>();
-            track.color = new Color(1f, 1f, 1f, TrackAlpha);
-            // 可点轨道 ⇒ 点空白翻一页（更省事）；不可点 ⇒ 不抢点击、不误触跳页
-            track.raycastTarget = TabletQolFeature.BarTrackClickPages;
-
-            GameObject handle = new GameObject("Handle", typeof(RectTransform), typeof(Image));
-            RectTransform hrt = (RectTransform)handle.transform;
-            hrt.SetParent(rt, false);
-            hrt.localScale = Vector3.one;
-            hrt.anchorMin = Vector2.zero;
-            hrt.anchorMax = Vector2.one;
-            hrt.offsetMin = new Vector2(1f, 1f);
-            hrt.offsetMax = new Vector2(-1f, -1f);
-            Image hi = handle.GetComponent<Image>();
-            hi.color = new Color(1f, 1f, 1f, HandleAlpha);
-            hi.raycastTarget = true;                 // 手柄始终可拖
-
-            Scrollbar bar = go.GetComponent<Scrollbar>();
-            bar.handleRect = hrt;
-            bar.targetGraphic = hi;
-            bar.direction = vertical ? Scrollbar.Direction.BottomToTop : Scrollbar.Direction.LeftToRight;
-            bar.navigation = new Navigation { mode = Navigation.Mode.None };
-
-            ScrollRect.ScrollbarVisibility visibility = TabletQolFeature.BarAlwaysVisible
-                ? ScrollRect.ScrollbarVisibility.Permanent
-                : ScrollRect.ScrollbarVisibility.AutoHide;
-            if (vertical)
-            {
-                scroll.verticalScrollbar = bar;
-                scroll.verticalScrollbarVisibility = visibility;
-                scroll.verticalScrollbarSpacing = 2f;
-            }
-            else
-            {
-                scroll.horizontalScrollbar = bar;
-                scroll.horizontalScrollbarVisibility = visibility;
-                scroll.horizontalScrollbarSpacing = 2f;
-            }
-
-            Log.Info<TabletQolFeature>(
-                $"平板列表已挂滚动条：{label}（{reason}；{(vertical ? "右侧竖条" : "底部横条")}，宽 {width}px，内缩 {inset}px，" +
-                $"{(TabletQolFeature.BarAlwaysVisible ? "常驻" : "内容超出时才出现")}，" +
-                $"{(TabletQolFeature.BarTrackClickPages ? "轨道可点翻页" : "轨道不吃点击")}；" +
-                $"当时轴=竖{scroll.vertical}/横{scroll.horizontal}{(axisForced ? "（都没开，按竖排处理）" : "")}）");
-            return true;
-        }
-    }
-
-    /// <summary>
     /// ② 「提交线索」二次确认栏。
     ///
-    /// **不再自己拼视觉**：确认栏里内嵌一张**原版线索卡片** —— 照抄游戏自己的用法
-    /// （`Managers.UI.MakeSubItem&lt;UI_ClueSubItem&gt;` → `SetInfo(clue)` → `InitPopupClue()`，
-    /// 转储 :52838-52840），所以"谁/在哪/何时 + 正文"整张卡片都是原版渲染；
-    /// 两个按钮也是**克隆卡片上的原版按钮**（`GetObject(3)` = `PropositionButton`）⇒ 配色/圆角/字体全原生。
-    /// 卡片只作展示：克隆出来的按钮不带原监听（Unity 的 `Instantiate` 不复制运行时加的监听），
-    /// 内嵌卡片自己的提交按钮会被关掉。
+    /// **视觉全部来自原版，不再自己拼**：
+    ///   · 主体是一张**原版线索卡片** —— 照抄游戏自己的用法
+    ///     （`Managers.UI.MakeSubItem&lt;UI_ClueSubItem&gt;` → `SetInfo(clue)` → `InitPopupClue()`，
+    ///     转储 :52838-52840），"谁/在哪/何时 + 正文"整张卡片由原版渲染；
+    ///   · 两个按钮是**克隆卡片上的原版按钮**（`GetObject(3)` = `PropositionButton`）；
+    ///   · 面板背景借**卡片自己的背景**（`GetObject(1)`，退化 `GetObject(0)`）的 `sprite`/`type` ——
+    ///     注意是 GameObject 上的 `Image`，不是 `Images` 枚举（那个枚举里 1/3 是"谁/什么"的**图标**，
+    ///     之前就是照它取的，才会出现一坨人影和花草）。
     ///
-    /// 面板底色用纯色（不借任何美术资源）；确认栏挂在**平板自己的 transform** 下 ⇒ 平板一关就跟着消失。
+    /// **尺寸跟着内容走**（实机反馈"相比卡片，UI 太大了"）：先量出卡片的实际尺寸，再据此算面板宽高
+    /// （卡片过宽时整体等比缩放到平板宽的 80% 以内），最后把标题/卡片/按钮按算好的尺寸摆进去。
+    ///
+    /// **半透明**（实机反馈"完全不透明"）：面板用 `PanelAlpha`（默认 0.86）而不是纯色实心；
+    /// 遮罩用 `DimAlpha`（默认 0.45）。
+    ///
+    /// 挂在**平板自己的 transform** 下 ⇒ 平板一关，确认栏跟着消失。
     /// </summary>
     internal static class TabletQolConfirm
     {
         private const string RootName = "DT_ClueSubmitConfirm";
 
-        /// <summary>面板宽度占平板宽度的比例。</summary>
-        private const float PanelWidthRatio = 0.66f;
+        private const float Padding = 26f;      // 面板内边距
+        private const float TitleH = 62f;       // 标题 + 副标题占高
+        private const float Gap = 16f;          // 标题 / 卡片 / 按钮之间
+        private const float MinPanelW = 420f;   // 面板最小宽度
 
         /// <summary>为 true 时放行原方法（确认后重入用），避免递归弹框。</summary>
         public static bool Suppress;
@@ -139,7 +45,7 @@ namespace DT_Tools.Patches.Experience.TabletQol
 
         /// <summary>
         /// 这张卡片是不是**确认栏自己内嵌**的那张。
-        /// 内嵌卡片只作展示，它的「提出命题」按钮虽然已被关掉，但这里再兜一道：
+        /// 内嵌卡片只作展示，它的「提出命题」按钮虽然已被关掉，这里再兜一道：
         /// 来自确认栏内部的点击一律不拦，免得出现"确认栏里再弹确认栏"的嵌套。
         /// </summary>
         public static bool IsInsideDialog(UI_ClueSubItem card)
@@ -175,8 +81,7 @@ namespace DT_Tools.Patches.Experience.TabletQol
 
             RectTransform parentRect = parent as RectTransform;
             float parentW = (parentRect != null && parentRect.rect.width > 1f) ? parentRect.rect.width : 900f;
-            float panelW = parentW * PanelWidthRatio;
-            float panelH = panelW * 0.72f;
+            float maxPanelW = parentW * 0.80f;
 
             // ── 根 + 遮罩 ────────────────────────────────────────────────
             _root = new GameObject(RootName, typeof(RectTransform));
@@ -202,7 +107,19 @@ namespace DT_Tools.Patches.Experience.TabletQol
             dimImg.raycastTarget = true;
             UI_Base.BindEvent(dim, _ => Hide());          // 点空白 = 取消
 
-            // ── 面板（纯色，不借美术资源）─────────────────────────────────
+            // ── 先把原版卡片挂到根下量尺寸（稍后再挪进面板）────────────────
+            Vector2 cardSize = Vector2.zero;
+            UI_ClueSubItem embedded = null;
+            if (TabletQolFeature.ConfirmShowCard)
+                embedded = EmbedCard(card, rootRt, maxPanelW, out cardSize);
+
+            // ── 按内容算面板尺寸 ─────────────────────────────────────────
+            float btnH = Mathf.Clamp(cardSize.y > 1f ? cardSize.y * 0.9f : 60f, 48f, 96f);
+            float contentW = Mathf.Max(cardSize.x, MinPanelW * 0.62f);
+            float panelW = Mathf.Min(contentW + Padding * 2f, maxPanelW);
+            float panelH = Padding + TitleH + Gap + (cardSize.y > 1f ? cardSize.y : 0f) + Gap + btnH + Padding;
+
+            // ── 面板（半透明 + 借卡片背景的 sprite）──────────────────────
             GameObject panel = new GameObject("Panel", typeof(RectTransform), typeof(Image));
             RectTransform panelRt = (RectTransform)panel.transform;
             panelRt.SetParent(rootRt, false);
@@ -212,43 +129,67 @@ namespace DT_Tools.Patches.Experience.TabletQol
             panelRt.sizeDelta = new Vector2(panelW, panelH);
             panelRt.anchoredPosition = Vector2.zero;
             panelRt.localScale = Vector3.one;
+
             Image panelImg = panel.GetComponent<Image>();
-            panelImg.color = new Color(0.05f, 0.06f, 0.08f, 0.98f);
-            panelImg.raycastTarget = true;                // 面板吞点击：点面板不当作取消
+            Image cardBg = ObjectImage(card, 1) ?? ObjectImage(card, 0);
+            if (cardBg != null && cardBg.sprite != null)
+            {
+                panelImg.sprite = cardBg.sprite;         // 卡片自己的背景美术 ⇒ 原生观感
+                panelImg.type = cardBg.type;
+            }
+            float alpha = Mathf.Clamp01(TabletQolFeature.PanelAlpha);
+            Color baseColor = cardBg != null ? cardBg.color : new Color(0.05f, 0.06f, 0.08f, 1f);
+            panelImg.color = new Color(baseColor.r * 0.9f, baseColor.g * 0.9f, baseColor.b * 0.95f, alpha);
+            panelImg.raycastTarget = true;               // 面板吞点击：点面板不当作取消
 
-            // ── 标题 ─────────────────────────────────────────────────────
-            MakeLabel(panelRt, "确认提交该线索？", 36f, new Color(1f, 1f, 1f, 1f), -34f);
-            MakeLabel(panelRt, "提交后不可撤回", 24f, new Color(1f, 0.78f, 0.35f, 1f), -86f);
+            // 把"到底借到了什么"记下来：预制体里的 sprite 引用离线解不出来，实机一眼可查
+            Log.Info<TabletQolFeature>(
+                $"面板背景取自卡片 GetObject(1/0)：sprite={(cardBg != null && cardBg.sprite != null ? cardBg.sprite.name : "<null>")}，" +
+                $"type={(cardBg != null ? cardBg.type.ToString() : "-")}，" +
+                $"color={(cardBg != null ? cardBg.color.ToString() : "-")}");
 
-            // ── 内嵌一张原版线索卡片（照抄游戏的用法）────────────────────
-            if (TabletQolFeature.ConfirmShowCard)
-                EmbedCard(card, panelRt, panelW);
+            // ── 标题（小一点，别抢卡片的视觉）─────────────────────────────
+            MakeLabel(panelRt, "确认提交该线索？", 28f, new Color(1f, 1f, 1f, 1f), Padding + 2f);
+            MakeLabel(panelRt, "提交后不可撤回", 20f, new Color(1f, 0.78f, 0.35f, 1f), Padding + 36f);
 
-            // ── 两个按钮（克隆卡片上的原版按钮）──────────────────────────
-            float btnW = panelW * 0.30f;
-            float btnH = Mathf.Max(56f, panelH * 0.14f);
-            MakeCloneButton(card, panelRt, "确认提交", new Vector2(-btnW * 0.62f, 52f), new Vector2(btnW, btnH),
+            // ── 把卡片挪进面板并摆好 ─────────────────────────────────────
+            if (embedded != null && cardSize.y > 1f)
+            {
+                RectTransform crt = (RectTransform)embedded.transform;
+                crt.SetParent(panelRt, false);
+                crt.anchorMin = new Vector2(0.5f, 1f);
+                crt.anchorMax = new Vector2(0.5f, 1f);
+                crt.pivot = new Vector2(0.5f, 1f);
+                crt.anchoredPosition = new Vector2(0f, -(Padding + TitleH + Gap));
+            }
+
+            // ── 两个按钮（克隆原版按钮），按内容宽度摆 ────────────────────
+            float btnW = Mathf.Min(panelW * 0.32f, 260f);
+            float btnY = Padding;
+            MakeCloneButton(card, panelRt, "确认提交", new Vector2(-btnW * 0.58f, btnY), new Vector2(btnW, btnH),
                 () => ConfirmAndSubmit(card));
-            MakeCloneButton(card, panelRt, "取消", new Vector2(btnW * 0.62f, 52f), new Vector2(btnW, btnH), Hide);
+            MakeCloneButton(card, panelRt, "取消", new Vector2(btnW * 0.58f, btnY), new Vector2(btnW, btnH), Hide);
 
-            Log.Info<TabletQolFeature>($"已弹出「提交线索」确认栏（卡片={card.name}，面板 {panelW:F0}×{panelH:F0}）");
+            Log.Info<TabletQolFeature>(
+                $"已弹出「提交线索」确认栏（卡片={card.name}；卡片 {cardSize.x:F0}×{cardSize.y:F0}，" +
+                $"面板 {panelW:F0}×{panelH:F0}，面板不透明度 {alpha:F2}）");
         }
 
-        /// <summary>把原版卡片嵌进确认栏（只作展示：关掉它自己的提交按钮）。</summary>
-        private static void EmbedCard(UI_ClueSubItem source, RectTransform panelRt, float panelW)
+        /// <summary>把原版卡片嵌进来量尺寸（只作展示：关掉它自己的提交按钮）。</summary>
+        private static UI_ClueSubItem EmbedCard(UI_ClueSubItem source, RectTransform parent, float maxW, out Vector2 size)
         {
+            size = Vector2.zero;
             try
             {
-                UI_ClueSubItem embedded = Managers.UI.MakeSubItem<UI_ClueSubItem>(panelRt);
+                UI_ClueSubItem embedded = Managers.UI.MakeSubItem<UI_ClueSubItem>(parent);
                 if (embedded == null)
-                    return;
+                    return null;
 
                 var clue = source.Clue;                   // 类型是嵌套类型，用 var 免去命名
                 embedded.SetInfo(clue);
                 embedded.InitPopupClue();                 // 与游戏自己的线索浮窗同一套初始化（转储 :52838-52840）
 
-                // 只作展示 ⇒ 关掉它自己的「提交线索」按钮（它由原版刷新逻辑控制显隐，这里直接关掉最稳）；
-                // 再顺手把 Button 置为不可交互，双保险（万一别的逻辑把它 SetActive(true) 回来）。
+                // 只作展示 ⇒ 关掉它自己的「提交线索」按钮，并置为不可交互（双保险）
                 GameObject submitGo = Traverse.Create(embedded).Method("GetObject", new object[] { 3 }).GetValue<GameObject>();
                 if (submitGo != null)
                 {
@@ -262,26 +203,32 @@ namespace DT_Tools.Patches.Experience.TabletQol
                 rt.anchorMin = new Vector2(0.5f, 0.5f);
                 rt.anchorMax = new Vector2(0.5f, 0.5f);
                 rt.pivot = new Vector2(0.5f, 0.5f);
-                rt.anchoredPosition = new Vector2(0f, -6f);
+                rt.anchoredPosition = Vector2.zero;
                 rt.localScale = Vector3.one;
 
-                // 卡片比面板宽时整体缩放，避免溢出
                 LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
-                float cardW = rt.rect.width;
-                if (cardW > 1f)
+                float w = rt.rect.width;
+                float h = rt.rect.height;
+                if (w < 1f || h < 1f)
                 {
-                    float maxW = panelW * 0.88f;
-                    if (cardW > maxW)
-                        rt.localScale = new Vector3(maxW / cardW, maxW / cardW, 1f);
+                    w = 640f;
+                    h = 120f;                             // 量不出来时的兜底尺寸
                 }
+
+                float scale = (w > maxW && maxW > 1f) ? (maxW / w) : 1f;
+                if (scale < 1f)
+                    rt.localScale = new Vector3(scale, scale, 1f);
+                size = new Vector2(w * scale, h * scale);
+                return embedded;
             }
             catch (Exception ex)
             {
                 Log.Warn<TabletQolFeature>("内嵌原版线索卡片失败（已忽略，确认栏仍可用）：" + ex.Message);
+                return null;
             }
         }
 
-        private static void MakeLabel(Transform parent, string text, float size, Color color, float y)
+        private static void MakeLabel(Transform parent, string text, float size, Color color, float topOffset)
         {
             GameObject go = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
             RectTransform rt = (RectTransform)go.transform;
@@ -289,8 +236,8 @@ namespace DT_Tools.Patches.Experience.TabletQol
             rt.anchorMin = new Vector2(0f, 1f);
             rt.anchorMax = new Vector2(1f, 1f);
             rt.pivot = new Vector2(0.5f, 1f);
-            rt.sizeDelta = new Vector2(-60f, size + 12f);
-            rt.anchoredPosition = new Vector2(0f, y);
+            rt.sizeDelta = new Vector2(-Padding * 2f, size + 10f);
+            rt.anchoredPosition = new Vector2(0f, -topOffset);
             rt.localScale = Vector3.one;
 
             TextMeshProUGUI t = go.GetComponent<TextMeshProUGUI>();
@@ -352,7 +299,7 @@ namespace DT_Tools.Patches.Experience.TabletQol
         /// 用 `AccessTools.Method` + `MethodInfo.Invoke`，**不用 `Traverse.Method(name, args)`** ——
         /// 后者按"参数个数 + 值"挑重载，传 `null`（`PointerEventData` 用不到）时可能**静默匹配不上**，
         /// 表现为"确认了但什么都没发生"（实机踩过）。这里连结果一起记日志，万一还没发出去，
-        /// 日志里能直接看出是哪道闸门挡的（`IsAlive` / `IsSubmitProposition` / `CanSubmit` / `IsValid`）。
+        /// 日志里能直接看出是哪道闸门挡的。
         /// </summary>
         private static void ConfirmAndSubmit(UI_ClueSubItem card)
         {
@@ -417,6 +364,21 @@ namespace DT_Tools.Patches.Experience.TabletQol
             catch (Exception ex)
             {
                 return "读取失败(" + ex.Message + ")";
+            }
+        }
+
+        /// <summary>取卡片上某个 GameObject 的 Image（`GetObject` 是 protected ⇒ Traverse）。</summary>
+        private static Image ObjectImage(UI_ClueSubItem card, int idx)
+        {
+            try
+            {
+                GameObject go = Traverse.Create(card).Method("GetObject", new object[] { idx }).GetValue<GameObject>();
+                return go == null ? null : go.GetComponent<Image>();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn<TabletQolFeature>($"取卡片 GameObject[{idx}] 的 Image 失败（已忽略）：" + ex.Message);
+                return null;
             }
         }
     }
