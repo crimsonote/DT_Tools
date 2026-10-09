@@ -23,5 +23,8 @@ namespace DT_Tools.WebConsole
 
         [Config("游戏窗口失焦时保持主线程运行（Unity 后台运行）。从其他设备访问 WebUI 时必须开启：否则游戏一失焦主线程就停摆，所有命令都会超时。")]
         public static bool RunInBackground = true;
+
+        [Config("Author: 梦初雪\n自动检查并提示 mod 新版（GitHub Releases）。关闭后：不再自动请求 GitHub（省掉每 3 分钟一次的轮询），也不再弹更新徽标/气泡；手动「检查更新」仍然可用。")]
+        public static bool AutoUpdateCheck = true;
     }
 }

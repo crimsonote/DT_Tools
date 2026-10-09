@@ -73,9 +73,15 @@ namespace DT_Tools.WebConsole
         /// 返回状态 JSON（经 Json.To 序列化）。force=false 走缓存；force=true 绕过缓存
         /// 立即请求 GitHub（手动检查）。GitHub 拉取在持锁内同步进行——并发的状态轮询
         /// 会排队等结果，与 SteamApi 的锁内请求策略一致。
+        ///
+        /// <see cref="WebConsoleOptions.AutoUpdateCheck"/> 关闭时，**自动**路径既不请求 GitHub
+        /// 也不提示（省掉每 3 分钟一次的轮询，徽标/气泡不再出现）；手动检查（force=true）不受影响。
         /// </summary>
         public static object GetStatus(bool force)
         {
+            if (!force && !WebConsoleOptions.AutoUpdateCheck)
+                return BuildStatus(promptAllowed: false);   // 关闭自动提示：不请求、也不报"有新版本"
+
             lock (Gate)
             {
                 bool expired = _cached == null || DateTime.UtcNow - _checkedAt >= CacheTtl;
@@ -102,7 +108,7 @@ namespace DT_Tools.WebConsole
                         }
                     }
                 }
-                return BuildStatus();
+                return BuildStatus(promptAllowed: true);
             }
         }
 
@@ -164,10 +170,14 @@ namespace DT_Tools.WebConsole
 
         // ---- 状态组装 ----
 
-        private static object BuildStatus()
+        /// <summary>
+        /// 组装状态 JSON。<paramref name="promptAllowed"/> = false 时强制 <c>hasUpdate=false</c>：
+        /// 关了自动提示后，即使缓存里还留着上次手动检查的结果，也不该因此弹出更新徽标。
+        /// </summary>
+        private static object BuildStatus(bool promptAllowed)
         {
             bool hasUpdate = false;
-            if (_cached != null)
+            if (promptAllowed && _cached != null)
                 hasUpdate = IsNewer(_cached.TagName, CurrentVersion);
             return new
             {
