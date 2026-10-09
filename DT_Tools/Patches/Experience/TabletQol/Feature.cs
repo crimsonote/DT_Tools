@@ -61,6 +61,9 @@ namespace DT_Tools.Patches.Experience.TabletQol
         [Config("② 二次确认：遮罩不透明度（0–1）。", Min = 0f, Max = 1f)]
         public static float DimAlpha = 0.45f;
 
+        [Config("② 二次确认：确认栏面板底色（HTML 颜色）。默认 #22303F = 从游戏内平板线索卡片上取到的同一支蓝。")]
+        public static string PanelColorHex = "#22303F";
+
         [Config("② 二次确认：确认栏面板的不透明度（0–1，1 = 完全不透明）。", Min = 0f, Max = 1f)]
         public static float PanelAlpha = 0.86f;
 
