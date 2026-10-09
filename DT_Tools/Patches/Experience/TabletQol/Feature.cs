@@ -63,5 +63,8 @@ namespace DT_Tools.Patches.Experience.TabletQol
 
         [Config("② 二次确认：确认栏面板的不透明度（0–1，1 = 完全不透明）。", Min = 0f, Max = 1f)]
         public static float PanelAlpha = 0.86f;
+
+        [Config("② 二次确认：两个按钮的不透明度（0–1，1 = 纯白实心）。", Min = 0.2f, Max = 1f)]
+        public static float ButtonAlpha = 0.85f;
     }
 }

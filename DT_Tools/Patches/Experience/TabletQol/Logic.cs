@@ -108,11 +108,13 @@ namespace DT_Tools.Patches.Experience.TabletQol
             panelRt.localScale = Vector3.one;
 
             Image panelImg = panel.GetComponent<Image>();
-            Sprite pinBg = Managers.Resource.Load<Sprite>("clue_pin_bg.sprite");
-            if (pinBg != null)
+            // 面板底用**卡片自己的框**（tablet_clue_popup_frame）—— 按名字加载，与游戏同一套资源。
+            // 别用 clue_pin_bg：那是地图 pin 的底，自带一圈红色光晕（实机截图里那个怪圈就是它）。
+            Sprite panelSprite = Managers.Resource.Load<Sprite>("tablet_clue_popup_frame.sprite");
+            if (panelSprite != null)
             {
-                panelImg.sprite = pinBg;
-                panelImg.type = Image.Type.Sliced;
+                panelImg.sprite = panelSprite;
+                panelImg.type = Image.Type.Simple;
             }
             panelImg.color = new Color(1f, 1f, 1f, Mathf.Clamp01(TabletQolFeature.PanelAlpha));
             panelImg.raycastTarget = true;                // 面板吞点击：点面板不当作取消
@@ -227,14 +229,15 @@ namespace DT_Tools.Patches.Experience.TabletQol
             rt.anchoredPosition = pos;
             rt.localScale = Vector3.one;
 
-            // 克隆会带上鼠标悬停瞬间的外观（clue_submit_hover = 米黄）⇒ 显式设回游戏的正常态
+            // 克隆会带上鼠标悬停瞬间的外观（clue_submit_hover = 米黄）⇒ 显式设回游戏的正常态；
+            // 透明度用 ButtonAlpha —— 纯白实心在压暗的遮罩上太扎眼，半透明更像同一套 UI。
             Image img = clone.GetComponent<Image>();
             if (img != null)
             {
                 Sprite normal = Managers.Resource.Load<Sprite>("clue_submit_normal.sprite");
                 if (normal != null)
                     img.sprite = normal;
-                img.color = Color.white;
+                img.color = new Color(1f, 1f, 1f, Mathf.Clamp01(TabletQolFeature.ButtonAlpha));
             }
 
             TMP_Text[] texts = clone.GetComponentsInChildren<TMP_Text>(true);
