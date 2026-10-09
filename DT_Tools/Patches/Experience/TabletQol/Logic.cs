@@ -12,46 +12,34 @@ namespace DT_Tools.Patches.Experience.TabletQol
     /// <summary>
     /// ② 「提交线索」二次确认栏。
     ///
-    /// **视觉全部来自原版，不再自己拼**：
-    ///   · 主体是一张**原版线索卡片** —— 照抄游戏自己的用法
-    ///     （`Managers.UI.MakeSubItem&lt;UI_ClueSubItem&gt;` → `SetInfo(clue)` → `InitPopupClue()`，
-    ///     转储 :52838-52840），"谁/在哪/何时 + 正文"整张卡片由原版渲染；
-    ///   · 两个按钮是**克隆卡片上的原版按钮**（`GetObject(3)` = `PropositionButton`）；
-    ///   · 面板背景借**卡片自己的背景**（`GetObject(1)`，退化 `GetObject(0)`）的 `sprite`/`type` ——
-    ///     注意是 GameObject 上的 `Image`，不是 `Images` 枚举（那个枚举里 1/3 是"谁/什么"的**图标**，
-    ///     之前就是照它取的，才会出现一坨人影和花草）。
+    /// **提交动作走原版**：确认后调用 `UI_ClueSubItem.OnClickPropositionButton`（私有，转储 :86488）本身，
+    /// 不自己拼一份发包逻辑 —— 判据、发包、置标记、关平板都由原版负责。
     ///
-    /// **尺寸跟着内容走**（实机反馈"相比卡片，UI 太大了"）：先量出卡片的实际尺寸，再据此算面板宽高
-    /// （卡片过宽时整体等比缩放到平板宽的 80% 以内），最后把标题/卡片/按钮按算好的尺寸摆进去。
+    /// **确认栏长相全部来自原版**：
+    ///   · 面板底借 `clue_pin_bg.sprite`（游戏自己的线索面板底），不透明度可配；
+    ///   · 主体是一张**原版线索卡片**（`Managers.UI.MakeSubItem&lt;UI_ClueSubItem&gt;` → `SetInfo` →
+    ///     `InitPopupClue`，照抄游戏用法，转储 :52838-52840），只作展示 ⇒ 关掉它自己的提交按钮；
+    ///   · 两个按钮是**克隆的原版按钮**（`GetObject(3)` = `PropositionButton`），并显式设回正常态
+    ///     （`clue_submit_normal.sprite` + 白色 —— 游戏在 `RefreshPropositionButton` 里就是这么设的，
+    ///     转储 :86285-86293；不设的话克隆会带上鼠标悬停时的 `clue_submit_hover` 米黄）。
     ///
-    /// **半透明**（实机反馈"完全不透明"）：面板用 `PanelAlpha`（默认 0.86）而不是纯色实心；
-    /// 遮罩用 `DimAlpha`（默认 0.45）。
+    /// **尺寸跟着内容走**：先量卡片实际尺寸再算面板宽高（卡片过宽时等比缩放到平板宽 80% 内）。
     ///
-    /// 挂在**平板自己的 transform** 下 ⇒ 平板一关，确认栏跟着消失。
+    /// 挂在平板自己的 transform 下 ⇒ 平板一关，确认栏跟着消失。
     /// </summary>
     internal static class TabletQolConfirm
     {
         private const string RootName = "DT_ClueSubmitConfirm";
 
-        private const float Padding = 26f;      // 面板内边距
-        private const float TitleH = 62f;       // 标题 + 副标题占高
-        private const float Gap = 16f;          // 标题 / 卡片 / 按钮之间
-        private const float MinPanelW = 420f;   // 面板最小宽度
+        private const float Padding = 26f;
+        private const float TitleH = 62f;
+        private const float Gap = 16f;
+        private const float MinPanelW = 420f;
 
         /// <summary>为 true 时放行原方法（确认后重入用），避免递归弹框。</summary>
         public static bool Suppress;
 
         private static GameObject _root;
-
-        /// <summary>
-        /// 这张卡片是不是**确认栏自己内嵌**的那张。
-        /// 内嵌卡片只作展示，它的「提出命题」按钮虽然已被关掉，这里再兜一道：
-        /// 来自确认栏内部的点击一律不拦，免得出现"确认栏里再弹确认栏"的嵌套。
-        /// </summary>
-        public static bool IsInsideDialog(UI_ClueSubItem card)
-        {
-            return card != null && _root != null && card.transform.IsChildOf(_root.transform);
-        }
 
         public static void Hide()
         {
@@ -66,24 +54,13 @@ namespace DT_Tools.Patches.Experience.TabletQol
             if (card == null)
                 return;
 
-            Transform parent = null;
-            try
-            {
-                if (Managers.Tablet != null && Managers.Tablet.Tablet != null)
-                    parent = Managers.Tablet.Tablet.transform;
-            }
-            catch (Exception ex)
-            {
-                Log.Warn<TabletQolFeature>("取平板根失败，退回卡片根节点：" + ex.Message);
-            }
-            if (parent == null)
-                parent = card.transform.root;
+            Transform parent = TabletRoot(card);
+            float tabletW = (parent as RectTransform)?.rect.width ?? 0f;
+            if (tabletW <= 1f)
+                tabletW = 900f;
+            float maxPanelW = tabletW * 0.80f;
 
-            RectTransform parentRect = parent as RectTransform;
-            float parentW = (parentRect != null && parentRect.rect.width > 1f) ? parentRect.rect.width : 900f;
-            float maxPanelW = parentW * 0.80f;
-
-            // ── 根 + 遮罩 ────────────────────────────────────────────────
+            // ── 根 + 遮罩（点空白 = 取消）────────────────────────────────
             _root = new GameObject(RootName, typeof(RectTransform));
             RectTransform rootRt = (RectTransform)_root.transform;
             rootRt.SetParent(parent, false);
@@ -105,21 +82,21 @@ namespace DT_Tools.Patches.Experience.TabletQol
             Image dimImg = dim.GetComponent<Image>();
             dimImg.color = new Color(0f, 0f, 0f, Mathf.Clamp01(TabletQolFeature.DimAlpha));
             dimImg.raycastTarget = true;
-            UI_Base.BindEvent(dim, _ => Hide());          // 点空白 = 取消
+            UI_Base.BindEvent(dim, _ => Hide());
 
-            // ── 先把原版卡片挂到根下量尺寸（稍后再挪进面板）────────────────
+            // ── 先挂出卡片量尺寸（稍后挪进面板）──────────────────────────
             Vector2 cardSize = Vector2.zero;
-            UI_ClueSubItem embedded = null;
-            if (TabletQolFeature.ConfirmShowCard)
-                embedded = EmbedCard(card, rootRt, maxPanelW, out cardSize);
+            UI_ClueSubItem embedded = TabletQolFeature.ConfirmShowCard
+                ? EmbedCard(card, rootRt, maxPanelW, out cardSize)
+                : null;
 
             // ── 按内容算面板尺寸 ─────────────────────────────────────────
             float btnH = Mathf.Clamp(cardSize.y > 1f ? cardSize.y * 0.9f : 60f, 48f, 96f);
             float contentW = Mathf.Max(cardSize.x, MinPanelW * 0.62f);
             float panelW = Mathf.Min(contentW + Padding * 2f, maxPanelW);
-            float panelH = Padding + TitleH + Gap + (cardSize.y > 1f ? cardSize.y : 0f) + Gap + btnH + Padding;
+            float panelH = Padding + TitleH + Gap + cardSize.y + Gap + btnH + Padding;
 
-            // ── 面板（半透明 + 借卡片背景的 sprite）──────────────────────
+            // ── 面板（游戏自己的线索面板底 + 可配不透明度）────────────────
             GameObject panel = new GameObject("Panel", typeof(RectTransform), typeof(Image));
             RectTransform panelRt = (RectTransform)panel.transform;
             panelRt.SetParent(rootRt, false);
@@ -131,29 +108,20 @@ namespace DT_Tools.Patches.Experience.TabletQol
             panelRt.localScale = Vector3.one;
 
             Image panelImg = panel.GetComponent<Image>();
-            Image cardBg = ObjectImage(card, 1) ?? ObjectImage(card, 0);
-            if (cardBg != null && cardBg.sprite != null)
+            Sprite pinBg = Managers.Resource.Load<Sprite>("clue_pin_bg.sprite");
+            if (pinBg != null)
             {
-                panelImg.sprite = cardBg.sprite;         // 卡片自己的背景美术 ⇒ 原生观感
-                panelImg.type = cardBg.type;
+                panelImg.sprite = pinBg;
+                panelImg.type = Image.Type.Sliced;
             }
-            float alpha = Mathf.Clamp01(TabletQolFeature.PanelAlpha);
-            Color baseColor = cardBg != null ? cardBg.color : new Color(0.05f, 0.06f, 0.08f, 1f);
-            panelImg.color = new Color(baseColor.r * 0.9f, baseColor.g * 0.9f, baseColor.b * 0.95f, alpha);
-            panelImg.raycastTarget = true;               // 面板吞点击：点面板不当作取消
+            panelImg.color = new Color(1f, 1f, 1f, Mathf.Clamp01(TabletQolFeature.PanelAlpha));
+            panelImg.raycastTarget = true;                // 面板吞点击：点面板不当作取消
 
-            // 把"到底借到了什么"记下来：预制体里的 sprite 引用离线解不出来，实机一眼可查
-            Log.Info<TabletQolFeature>(
-                $"面板背景取自卡片 GetObject(1/0)：sprite={(cardBg != null && cardBg.sprite != null ? cardBg.sprite.name : "<null>")}，" +
-                $"type={(cardBg != null ? cardBg.type.ToString() : "-")}，" +
-                $"color={(cardBg != null ? cardBg.color.ToString() : "-")}");
-
-            // ── 标题（小一点，别抢卡片的视觉）─────────────────────────────
-            MakeLabel(panelRt, "确认提交该线索？", 28f, new Color(1f, 1f, 1f, 1f), Padding + 2f);
+            // ── 标题 + 卡片 + 按钮 ───────────────────────────────────────
+            MakeLabel(panelRt, "确认提交该线索？", 28f, Color.white, Padding + 2f);
             MakeLabel(panelRt, "提交后不可撤回", 20f, new Color(1f, 0.78f, 0.35f, 1f), Padding + 36f);
 
-            // ── 把卡片挪进面板并摆好 ─────────────────────────────────────
-            if (embedded != null && cardSize.y > 1f)
+            if (embedded != null)
             {
                 RectTransform crt = (RectTransform)embedded.transform;
                 crt.SetParent(panelRt, false);
@@ -163,41 +131,41 @@ namespace DT_Tools.Patches.Experience.TabletQol
                 crt.anchoredPosition = new Vector2(0f, -(Padding + TitleH + Gap));
             }
 
-            // ── 两个按钮（克隆原版按钮），按内容宽度摆 ────────────────────
             float btnW = Mathf.Min(panelW * 0.32f, 260f);
-            float btnY = Padding;
-            MakeCloneButton(card, panelRt, "确认提交", new Vector2(-btnW * 0.58f, btnY), new Vector2(btnW, btnH),
+            MakeCloneButton(card, panelRt, "确认提交", new Vector2(-btnW * 0.58f, Padding), new Vector2(btnW, btnH),
                 () => ConfirmAndSubmit(card));
-            MakeCloneButton(card, panelRt, "取消", new Vector2(btnW * 0.58f, btnY), new Vector2(btnW, btnH), Hide);
-
-            Log.Info<TabletQolFeature>(
-                $"已弹出「提交线索」确认栏（卡片={card.name}；卡片 {cardSize.x:F0}×{cardSize.y:F0}，" +
-                $"面板 {panelW:F0}×{panelH:F0}，面板不透明度 {alpha:F2}）");
+            MakeCloneButton(card, panelRt, "取消", new Vector2(btnW * 0.58f, Padding), new Vector2(btnW, btnH), Hide);
         }
 
-        /// <summary>把原版卡片嵌进来量尺寸（只作展示：关掉它自己的提交按钮）。</summary>
+        /// <summary>确认栏挂到平板自己的 transform 下（平板一关就跟着消失）；取不到就退回卡片根节点。</summary>
+        private static Transform TabletRoot(UI_ClueSubItem card)
+        {
+            try
+            {
+                if (Managers.Tablet != null && Managers.Tablet.Tablet != null)
+                    return Managers.Tablet.Tablet.transform;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn<TabletQolFeature>("取平板根失败，退回卡片根节点：" + ex.Message);
+            }
+            return card.transform.root;
+        }
+
+        /// <summary>把原版卡片嵌进来量尺寸（只作展示 ⇒ 关掉它自己的提交按钮）。</summary>
         private static UI_ClueSubItem EmbedCard(UI_ClueSubItem source, RectTransform parent, float maxW, out Vector2 size)
         {
             size = Vector2.zero;
             try
             {
                 UI_ClueSubItem embedded = Managers.UI.MakeSubItem<UI_ClueSubItem>(parent);
-                if (embedded == null)
-                    return null;
-
                 var clue = source.Clue;                   // 类型是嵌套类型，用 var 免去命名
                 embedded.SetInfo(clue);
                 embedded.InitPopupClue();                 // 与游戏自己的线索浮窗同一套初始化（转储 :52838-52840）
 
-                // 只作展示 ⇒ 关掉它自己的「提交线索」按钮，并置为不可交互（双保险）
                 GameObject submitGo = Traverse.Create(embedded).Method("GetObject", new object[] { 3 }).GetValue<GameObject>();
                 if (submitGo != null)
-                {
-                    submitGo.SetActive(false);
-                    Button submitBtn = submitGo.GetComponent<Button>();
-                    if (submitBtn != null)
-                        submitBtn.interactable = false;
-                }
+                    submitGo.SetActive(false);            // 只作展示，别让它在确认栏里再发一次
 
                 RectTransform rt = (RectTransform)embedded.transform;
                 rt.anchorMin = new Vector2(0.5f, 0.5f);
@@ -209,12 +177,6 @@ namespace DT_Tools.Patches.Experience.TabletQol
                 LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
                 float w = rt.rect.width;
                 float h = rt.rect.height;
-                if (w < 1f || h < 1f)
-                {
-                    w = 640f;
-                    h = 120f;                             // 量不出来时的兜底尺寸
-                }
-
                 float scale = (w > maxW && maxW > 1f) ? (maxW / w) : 1f;
                 if (scale < 1f)
                     rt.localScale = new Vector3(scale, scale, 1f);
@@ -223,7 +185,7 @@ namespace DT_Tools.Patches.Experience.TabletQol
             }
             catch (Exception ex)
             {
-                Log.Warn<TabletQolFeature>("内嵌原版线索卡片失败（已忽略，确认栏仍可用）：" + ex.Message);
+                Log.Warn<TabletQolFeature>("内嵌原版线索卡片失败（确认栏仍可用）：" + ex.Message);
                 return null;
             }
         }
@@ -248,28 +210,13 @@ namespace DT_Tools.Patches.Experience.TabletQol
             t.raycastTarget = false;
         }
 
-        /// <summary>克隆卡片上的原版按钮（`GetObject(3)` = PropositionButton），换标签、绑自己的动作。</summary>
+        /// <summary>克隆卡片上的原版按钮（`GetObject(3)`），换标签、设回正常态、绑自己的动作。</summary>
         private static void MakeCloneButton(UI_ClueSubItem source, Transform parent, string label,
             Vector2 pos, Vector2 size, Action onClick)
         {
-            GameObject clone = null;
-            try
-            {
-                GameObject src = Traverse.Create(source).Method("GetObject", new object[] { 3 }).GetValue<GameObject>();
-                if (src != null)
-                    clone = UnityEngine.Object.Instantiate(src, parent);
-            }
-            catch (Exception ex)
-            {
-                Log.Warn<TabletQolFeature>($"克隆原版按钮失败，改用纯色按钮：{ex.Message}");
-            }
-
-            if (clone == null)
-            {
-                clone = new GameObject("Button_" + label, typeof(RectTransform), typeof(Image));
-                clone.transform.SetParent(parent, false);
-                clone.GetComponent<Image>().color = new Color(0.22f, 0.24f, 0.28f, 1f);
-            }
+            GameObject src = Traverse.Create(source).Method("GetObject", new object[] { 3 }).GetValue<GameObject>();
+            GameObject clone = src != null ? UnityEngine.Object.Instantiate(src, parent)
+                                           : new GameObject("Button_" + label, typeof(RectTransform), typeof(Image));
 
             RectTransform rt = (RectTransform)clone.transform;
             rt.SetParent(parent, false);
@@ -280,26 +227,33 @@ namespace DT_Tools.Patches.Experience.TabletQol
             rt.anchoredPosition = pos;
             rt.localScale = Vector3.one;
 
-            // 换标签：克隆体上的第一个文本就是按钮文字
+            // 克隆会带上鼠标悬停瞬间的外观（clue_submit_hover = 米黄）⇒ 显式设回游戏的正常态
+            Image img = clone.GetComponent<Image>();
+            if (img != null)
+            {
+                Sprite normal = Managers.Resource.Load<Sprite>("clue_submit_normal.sprite");
+                if (normal != null)
+                    img.sprite = normal;
+                img.color = Color.white;
+            }
+
             TMP_Text[] texts = clone.GetComponentsInChildren<TMP_Text>(true);
             if (texts.Length > 0)
                 texts[0].text = label;
 
-            // 清掉可能被序列化带过来的监听（运行时加的监听本来就不会被 Instantiate 复制，这里再保险一次）
             Button btn = clone.GetComponent<Button>();
             if (btn != null)
-                btn.onClick = new Button.ButtonClickedEvent();
+                btn.onClick = new Button.ButtonClickedEvent();   // 清掉可能被序列化带过来的监听
 
             UI_Base.BindEvent(clone, _ => onClick());
         }
 
         /// <summary>
-        /// 确认：关掉确认栏，然后**执行卡片原本的提交逻辑**。
+        /// 确认：关掉确认栏，然后调用**原版**提交函数。
         ///
-        /// 用 `AccessTools.Method` + `MethodInfo.Invoke`，**不用 `Traverse.Method(name, args)`** ——
-        /// 后者按"参数个数 + 值"挑重载，传 `null`（`PointerEventData` 用不到）时可能**静默匹配不上**，
-        /// 表现为"确认了但什么都没发生"（实机踩过）。这里连结果一起记日志，万一还没发出去，
-        /// 日志里能直接看出是哪道闸门挡的。
+        /// 用 `AccessTools.Method` + `Invoke` 而不是 `Traverse.Method(name, args)`：后者按"参数个数 + 值"
+        /// 挑重载，传 `null`（`PointerEventData` 用不到）时可能静默匹配不上。
+        /// `Suppress` 期间放行 Prefix，避免"确认 → 又弹一次框"。
         /// </summary>
         private static void ConfirmAndSubmit(UI_ClueSubItem card)
         {
@@ -316,69 +270,18 @@ namespace DT_Tools.Patches.Experience.TabletQol
                     return;
                 }
 
-                Log.Info<TabletQolFeature>(
-                    $"确认提交前：IsAlive={Managers.Game.IsAlive} IsSubmitProposition={Managers.Game.IsSubmitProposition} " +
-                    $"CanSubmit={ReadBool(card, "CanSubmitProposition")} IsValid={ReadIsValid(card)} " +
-                    $"IsTrialDiscussPhase={ReadBool(card, "IsTrialDiscussPhase")}");
-
                 Suppress = true;
                 target.Invoke(card, new object[] { null });   // 原方法体不使用该参数（转储 :86488-86500）
                 Log.Info<TabletQolFeature>(
-                    $"确认提交：已调用原方法（调用后 IsSubmitProposition={Managers.Game.IsSubmitProposition}）");
+                    $"确认提交：已调用原版提交函数（IsSubmitProposition={Managers.Game.IsSubmitProposition}）");
             }
             catch (Exception ex)
             {
-                Log.Error<TabletQolFeature>("确认后执行原提交失败：" + ex.Message);
+                Log.Error<TabletQolFeature>("确认后执行原版提交失败：" + ex.Message);
             }
             finally
             {
                 Suppress = false;
-            }
-        }
-
-        /// <summary>诊断用：读一个无参私有 bool 方法的结果。</summary>
-        private static string ReadBool(UI_ClueSubItem card, string method)
-        {
-            try
-            {
-                object value = Traverse.Create(card).Method(method).GetValue();
-                return value == null ? "null" : value.ToString();
-            }
-            catch (Exception ex)
-            {
-                return "读取失败(" + ex.Message + ")";
-            }
-        }
-
-        /// <summary>诊断用：`IsValid(PropositionInfo)` 需要一个参数，单独读。</summary>
-        private static string ReadIsValid(UI_ClueSubItem card)
-        {
-            try
-            {
-                object info = card.Clue == null ? null : card.Clue.Info;
-                if (info == null)
-                    return "Info=null";
-                object value = Traverse.Create(card).Method("IsValid", new object[] { info }).GetValue();
-                return value == null ? "null" : value.ToString();
-            }
-            catch (Exception ex)
-            {
-                return "读取失败(" + ex.Message + ")";
-            }
-        }
-
-        /// <summary>取卡片上某个 GameObject 的 Image（`GetObject` 是 protected ⇒ Traverse）。</summary>
-        private static Image ObjectImage(UI_ClueSubItem card, int idx)
-        {
-            try
-            {
-                GameObject go = Traverse.Create(card).Method("GetObject", new object[] { idx }).GetValue<GameObject>();
-                return go == null ? null : go.GetComponent<Image>();
-            }
-            catch (Exception ex)
-            {
-                Log.Warn<TabletQolFeature>($"取卡片 GameObject[{idx}] 的 Image 失败（已忽略）：" + ex.Message);
-                return null;
             }
         }
     }
