@@ -17,6 +17,11 @@ namespace DT_Tools.Patches.Experience.TabletQol
     /// 平板列表都是竖排（`verticalNormalizedPosition` / `UI_SmoothScroll.ScrollToVertical`，
     /// 转储 :52730 / :53667 / :54830），而"都没开"通常只是内容还短/还没刷新 ⇒ 跳过就永远挂不上
     /// （实机踩过：同一块 `ClueSrollRect` 会议阶段有条、调查阶段没条）。
+    ///
+    /// `replaceExisting`：目标上已经有滚动条时怎么办。默认**不动**原版自带的；
+    /// 传 true = 摘掉原版那根、挂上我们的，并把原版那根 `SetActive(false)`
+    /// （举报页那根轨道/手柄两张 Image 的 alpha 都是 0，看不见却 `raycastTarget = 1`，
+    /// 继续 active 会吃掉右侧一竖条的点击）。自己挂过的那根按名字认出来 ⇒ 重复调用仍是空操作。
     /// </summary>
     internal static class TabletQolScrollbar
     {
@@ -25,12 +30,23 @@ namespace DT_Tools.Patches.Experience.TabletQol
         private const float TrackAlpha = 0.10f;
         private const float HandleAlpha = 0.45f;
 
-        public static bool Attach(ScrollRect scroll, string label, string reason)
+        public static bool Attach(ScrollRect scroll, string label, string reason, bool replaceExisting = false)
         {
             if (scroll == null)
                 return false;
-            if (scroll.verticalScrollbar != null || scroll.horizontalScrollbar != null)
-                return false;                        // 已挂（被销毁时 Unity 的 null 语义会让这里重新挂）
+
+            Scrollbar current = scroll.verticalScrollbar ?? scroll.horizontalScrollbar;
+            Scrollbar stale = null;
+            if (current != null)
+            {
+                if (current.name == BarName)
+                    return false;                    // 本功能自己挂过了（被销毁时 Unity 的 null 语义会让这里重新挂）
+                if (!replaceExisting)
+                    return false;                    // 原版自带的滚动条：不动
+                stale = current;                      // replaceExisting：先摘掉，挂完再隐藏
+                scroll.verticalScrollbar = null;
+                scroll.horizontalScrollbar = null;
+            }
 
             bool axisForced = !scroll.vertical && !scroll.horizontal;
             bool vertical = scroll.vertical || axisForced;
@@ -103,7 +119,11 @@ namespace DT_Tools.Patches.Experience.TabletQol
                 $"平板列表已挂滚动条：{label}（{reason}；{(vertical ? "右侧竖条" : "底部横条")}，宽 {width}px，内缩 {inset}px，" +
                 $"{(TabletQolFeature.BarAlwaysVisible ? "常驻" : "内容超出时才出现")}，" +
                 $"{(TabletQolFeature.BarTrackClickPages ? "轨道可点翻页" : "轨道不吃点击")}；" +
-                $"当时轴=竖{scroll.vertical}/横{scroll.horizontal}{(axisForced ? "（都没开，按竖排处理）" : "")}）");
+                $"当时轴=竖{scroll.vertical}/横{scroll.horizontal}{(axisForced ? "（都没开，按竖排处理）" : "")}" +
+                $"{(stale == null ? "" : $"；原版自带那根（{stale.name}）已换成本条并隐藏")}）");
+            if (stale != null)
+                stale.gameObject.SetActive(false);   // 看不见却吃点击的那根，别再挡着
+
             return true;
         }
     }
